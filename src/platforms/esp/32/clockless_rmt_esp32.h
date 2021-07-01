@@ -113,12 +113,7 @@ extern "C" {
 #endif
 
 #include "esp32-hal.h"
-// ESP_IDF_VERSION_MAJOR is defined in ESP-IDF v3.3 or later
-#if defined(ESP_IDF_VERSION_MAJOR) && ESP_IDF_VERSION_MAJOR > 3
-#include "esp_intr_alloc.h"
-#else
 #include "esp_intr.h"
-#endif
 #include "driver/gpio.h"
 #include "driver/rmt.h"
 #include "driver/periph_ctrl.h"
@@ -188,13 +183,10 @@ __attribute__ ((always_inline)) inline static uint32_t __clock_cycles() {
 #define FASTLED_RMT_MAX_CONTROLLERS 32
 #endif
 
-// -- Max RMT channel (default to 8 on ESP32 and 4 on ESP32-S2)
+// -- Number of RMT channels to use (up to 8, but 4 by default)
+//    Redefine this value to 1 to force serial output
 #ifndef FASTLED_RMT_MAX_CHANNELS
-#ifdef CONFIG_IDF_TARGET_ESP32S2
-#define FASTLED_RMT_MAX_CHANNELS 4
-#else
-#define FASTLED_RMT_MAX_CHANNELS 8
-#endif
+#define FASTLED_RMT_MAX_CHANNELS (8/FASTLED_RMT_MEM_BLOCKS)
 #endif
 
 class ESP32RMTController
@@ -218,10 +210,9 @@ private:
     uint32_t       mLastFill;
 
     // -- Pixel data
-    uint8_t *      mPixelData;
+    uint32_t *     mPixelData;
     int            mSize;
     int            mCur;
-    int            mBufSize;
 
     // -- RMT memory
     volatile uint32_t * mRMT_mem_ptr;
@@ -234,23 +225,18 @@ private:
     uint16_t       mBufferSize; // bytes
     int            mCurPulse;
 
-    // -- These values need to be real variables, so we can access them
-    //    in the cpp file
-    static int     gMaxChannel;
-    static int     gMemBlocks;
-
 public:
 
     // -- Constructor
     //    Mainly just stores the template parameters from the LEDController as
     //    member variables.
-    ESP32RMTController(int DATA_PIN, int T1, int T2, int T3, int maxChannel, int memBlocks);
+    ESP32RMTController(int DATA_PIN, int T1, int T2, int T3);
 
     // -- Get max cycles per fill
     uint32_t IRAM_ATTR getMaxCyclesPerFill() const { return mMaxCyclesPerFill; }
 
     // -- Get or create the pixel data buffer
-    uint8_t * getPixelBuffer(int size_in_bytes);
+    uint32_t * getPixelBuffer(int size_in_bytes);
 
     // -- Initialize RMT subsystem
     //    This only needs to be done once. The particular pin is not important,
@@ -322,11 +308,12 @@ private:
 public:
 
     ClocklessController()
-        : mRMTController(DATA_PIN, T1, T2, T3, FASTLED_RMT_MAX_CHANNELS, FASTLED_RMT_MEM_BLOCKS)
+        : mRMTController(DATA_PIN, T1, T2, T3)
         {}
 
     void init()
     {
+        // mRMTController = new ESP32RMTController(DATA_PIN, T1, T2, T3);
     }
 
     virtual uint16_t getMaxRefreshRate() const { return 400; }
@@ -342,15 +329,43 @@ protected:
     {
         // -- Make sure the buffer is allocated
         int size_in_bytes = pixels.size() * 3;
-        uint8_t * pData = mRMTController.getPixelBuffer(size_in_bytes);
+        uint32_t * pData = mRMTController.getPixelBuffer(size_in_bytes);
 
-        // -- This might be faster
+        // -- Read out the pixel data using the pixel controller methods that
+        //    perform the scaling and adjustments 
+        int count = 0;
+        int which = 0;
         while (pixels.has(1)) {
-            *pData++ = pixels.loadAndScale0();
-            *pData++ = pixels.loadAndScale1();
-            *pData++ = pixels.loadAndScale2();
-            pixels.advanceData();
-            pixels.stepDithering();
+            // -- Get the next four bytes of data
+            uint8_t four[4] = {0,0,0,0};
+            for (int i = 0; i < 4; i++) {
+                switch (which) {
+                case 0: 
+                    four[i] = pixels.loadAndScale0();
+                    break;
+                case 1:
+                    four[i] = pixels.loadAndScale1();
+                    break;
+                case 2:
+                    four[i] = pixels.loadAndScale2();
+                    pixels.advanceData();
+                    pixels.stepDithering();
+                    break;
+                }
+                // -- Move to the next color
+                which++;
+                if (which > 2) which = 0;
+
+                // -- Stop if there's no more data
+                if ( ! pixels.has(1)) break;
+            }
+
+            // -- Pack the four bytes into a 32-bit value with the right bit order
+            uint8_t a = four[0];
+            uint8_t b = four[1];
+            uint8_t c = four[2];
+            uint8_t d = four[3];
+            pData[count++] = a << 24 | b << 16 | c << 8 | d;
         }
     }
 

@@ -1,8 +1,6 @@
 
 #ifdef ESP32
 
-#ifndef FASTLED_ESP32_I2S
-
 #define FASTLED_INTERNAL
 #include "FastLED.h"
 
@@ -34,25 +32,15 @@ CMinWait<50>   gWait;
 
 static bool gInitialized = false;
 
-// -- Stored values for FASTLED_RMT_MAX_CHANNELS and FASTLED_RMT_MEM_BLOCKS
-int ESP32RMTController::gMaxChannel;
-int ESP32RMTController::gMemBlocks;
-
-
-ESP32RMTController::ESP32RMTController(int DATA_PIN, int T1, int T2, int T3, int maxChannel, int memBlocks)
+ESP32RMTController::ESP32RMTController(int DATA_PIN, int T1, int T2, int T3)
     : mPixelData(0), 
       mSize(0), 
-      mCur(0),
-      mBufSize(0), 
+      mCur(0), 
       mWhichHalf(0),
       mBuffer(0),
       mBufferSize(0),
       mCurPulse(0)
 {
-    // -- Store the max channel and mem blocks parameters
-    gMaxChannel = maxChannel;
-    gMemBlocks = memBlocks;
-
     // -- Precompute rmt items corresponding to a zero bit and a one bit
     //    according to the timing values given in the template instantiation
     // T1H
@@ -85,21 +73,12 @@ ESP32RMTController::ESP32RMTController(int DATA_PIN, int T1, int T2, int T3, int
 // -- Get or create the buffer for the pixel data
 //    We can't allocate it ahead of time because we don't have
 //    the PixelController object until show is called.
-uint8_t * ESP32RMTController::getPixelBuffer(int size_in_bytes)
+uint32_t * ESP32RMTController::getPixelBuffer(int size_in_bytes)
 {
-    // -- Free the old buffer if it will be too small
-    if (mPixelData != 0 and mBufSize < size_in_bytes) {
-        free(mPixelData);
-        mPixelData = 0;
-    }
-
     if (mPixelData == 0) {
-        mBufSize = size_in_bytes;
-        mPixelData = (uint8_t *) malloc(mBufSize);
+        mSize = ((size_in_bytes-1) / sizeof(uint32_t)) + 1;
+        mPixelData = (uint32_t *) calloc( mSize, sizeof(uint32_t));
     }
-
-    mSize = size_in_bytes;
-
     return mPixelData;
 }
 
@@ -109,15 +88,15 @@ void ESP32RMTController::init(gpio_num_t pin)
 {
     if (gInitialized) return;
 
-    for (int i = 0; i < gMaxChannel; i += gMemBlocks) {
+    for (int i = 0; i < FASTLED_RMT_MAX_CHANNELS; i++) {
         gOnChannel[i] = NULL;
 
         // -- RMT configuration for transmission
         rmt_config_t rmt_tx;
         rmt_tx.channel = rmt_channel_t(i);
         rmt_tx.rmt_mode = RMT_MODE_TX;
-        rmt_tx.gpio_num = pin;
-        rmt_tx.mem_block_num = gMemBlocks;
+        rmt_tx.gpio_num = pin;  // The particular pin will be assigned later
+        rmt_tx.mem_block_num = FASTLED_RMT_MEM_BLOCKS;
         rmt_tx.clk_div = DIVIDER;
         rmt_tx.tx_config.loop_en = false;
         rmt_tx.tx_config.carrier_level = RMT_CARRIER_LEVEL_LOW;
@@ -186,11 +165,11 @@ void IRAM_ATTR ESP32RMTController::showPixels()
 
         // -- First, fill all the available channels
         int channel = 0;
-        while (channel < gMaxChannel && gNext < gNumControllers) {
+        while (channel < FASTLED_RMT_MAX_CHANNELS && gNext < gNumControllers) {
             ESP32RMTController::startNext(channel);
             // -- Important: when we use more than one memory block, we need to
             //    skip the channels that would otherwise overlap in memory.
-            channel += gMemBlocks;
+            channel += FASTLED_RMT_MEM_BLOCKS;
         }
 
         // -- Wait here while the data is sent. The interrupt handler
@@ -336,13 +315,10 @@ void IRAM_ATTR ESP32RMTController::interruptHandler(void *arg)
     uint32_t intr_st = RMT.int_st.val;
     uint8_t channel;
 
-    for (channel = 0; channel < gMaxChannel; channel++) {
+    bool stuff_to_do = false;
+    for (channel = 0; channel < FASTLED_RMT_MAX_CHANNELS; channel++) {
         int tx_done_bit = channel * 3;
-        #ifdef CONFIG_IDF_TARGET_ESP32S2
-        int tx_next_bit = channel + 12;
-        #else
         int tx_next_bit = channel + 24;
-        #endif
 
         ESP32RMTController * pController = gOnChannel[channel];
         if (pController != NULL) {
@@ -398,16 +374,16 @@ void IRAM_ATTR ESP32RMTController::fillNext(bool check_time)
     // -- Use locals for speed
     volatile register uint32_t * pItem =  mRMT_mem_ptr;
 
-    for (register int i = 0; i < PULSES_PER_FILL/8; i++) {
+    for (register int i = 0; i < PULSES_PER_FILL/32; i++) {
         if (mCur < mSize) {
 
             // -- Get the next four bytes of pixel data
-            register uint32_t pixeldata = mPixelData[mCur] << 24;
+            register uint32_t pixeldata = mPixelData[mCur];
             mCur++;
             
             // Shift bits out, MSB first, setting RMTMEM.chan[n].data32[x] to the 
             // rmt_item32_t value corresponding to the buffered bit value
-            for (register uint32_t j = 0; j < 8; j++) {
+            for (register uint32_t j = 0; j < 32; j++) {
                 *pItem++ = (pixeldata & 0x80000000L) ? one_val : zero_val;
                 // Replaces: RMTMEM.chan[mRMT_channel].data32[mCurPulse].val = val;
 
@@ -458,6 +434,4 @@ void ESP32RMTController::convertByte(uint32_t byteval)
     }
 }
 
-#endif // ! FASTLED_ESP32_I2S
-
-#endif // ESP32
+#endif

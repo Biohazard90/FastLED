@@ -562,7 +562,7 @@ uint8_t inoise8(uint16_t x) {
 //     return (v *mulby44.i)  + ((v * mulby44.f) >> 4);
 // }
 
-void fill_raw_noise8(uint8_t *pData, uint8_t num_points, uint8_t octaves, uint16_t x, int scale, uint16_t time) {
+void fill_raw_noise8(uint8_t *pData, int num_points, uint8_t octaves, uint16_t x, int scale, uint16_t time) {
   uint32_t _xx = x;
   uint32_t scx = scale;
   for(int o = 0; o < octaves; ++o) {

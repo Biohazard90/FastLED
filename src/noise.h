@@ -64,7 +64,7 @@ extern int8_t inoise8_raw(uint16_t x);
 ///@param scalex the scale (distance) between x points when filling in noise
 ///@param scaley the scale (distance) between y points when filling in noise
 ///@param time the time position for the noise field
-void fill_raw_noise8(uint8_t *pData, uint8_t num_points, uint8_t octaves, uint16_t x, int scalex, uint16_t time);
+void fill_raw_noise8(uint8_t *pData, int num_points, uint8_t octaves, uint16_t x, int scalex, uint16_t time);
 void fill_raw_noise16into8(uint8_t *pData, uint8_t num_points, uint8_t octaves, uint32_t x, int scalex, uint32_t time);
 void fill_raw_2dnoise8(uint8_t *pData, int width, int height, uint8_t octaves, uint16_t x, int scalex, uint16_t y, int scaley, uint16_t time);
 void fill_raw_2dnoise16into8(uint8_t *pData, int width, int height, uint8_t octaves, uint32_t x, int scalex, uint32_t y, int scaley, uint32_t time);
